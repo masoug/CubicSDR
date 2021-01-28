@@ -162,9 +162,9 @@ IF (MSVC)
     SET(HAMLIB_DLLS "${PROJECT_SOURCE_DIR}/external/hamlib/${EX_PLATFORM}/libhamlib-2.dll" CACHE STRING "HAMLIB DLLS")
 ELSE (MSVC)
     ADD_DEFINITIONS(
-        -std=c++0x 
         -pthread
     )
+    SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -std=c++0x")
 ENDIF(MSVC)
 
 find_package(OpenGL REQUIRED)
@@ -401,6 +401,8 @@ SET (cubicsdr_sources
     external/tinyxml/tinyxmlparser.cpp
     external/tinyxml/tinyxmlerror.cpp
     external/cubicvr2/math/cubic_math.cpp
+    external/dump1090/mode_s.c
+    external/dump1090/mode_ac.c
 )
 
 IF(ENABLE_DIGITAL_LAB)
@@ -420,6 +422,7 @@ IF(ENABLE_DIGITAL_LAB)
         src/modules/modem/digital/ModemQAM.cpp
         src/modules/modem/digital/ModemQPSK.cpp
         src/modules/modem/digital/ModemFSK.cpp
+        src/modules/modem/digital/ModemSAMMY.cpp
     )
 ENDIF()
 
@@ -525,6 +528,7 @@ SET (cubicsdr_headers
     external/cubicvr2/math/vec2.h
     external/cubicvr2/math/vec3.h
     external/cubicvr2/math/vec4.h
+    external/dump1090/dump1090.h
 )
 
 IF(ENABLE_DIGITAL_LAB)
@@ -656,6 +660,7 @@ include_directories (
     ${PROJECT_SOURCE_DIR}/external/lodepng 
     ${PROJECT_SOURCE_DIR}/external/tinyxml
     ${PROJECT_SOURCE_DIR}/external/cubicvr2/math
+    ${PROJECT_SOURCE_DIR}/external/dump1090
 )
 
 set(RES_FILES "")
@@ -683,7 +688,8 @@ IF (NOT BUNDLE_APP)
         configure_files(${CUBICSDR_HEADER_IMAGE_DIR} ${CMAKE_BINARY_DIR}/${EX_PLATFORM_NAME} ${CUBICSDR_HEADER_IMAGE_FILE})
     ENDIF()
     add_executable(CubicSDR ${cubicsdr_sources} ${cubicsdr_headers} ${RES_FILES})
-    target_link_libraries(CubicSDR ${LIQUID_LIB} ${wxWidgets_LIBRARIES} ${OPENGL_LIBRARIES} ${OTHER_LIBRARIES})
+    #target_link_libraries(CubicSDR ${LIQUID_LIB} ${wxWidgets_LIBRARIES} ${OPENGL_LIBRARIES} ${OTHER_LIBRARIES})
+    target_link_libraries(CubicSDR ${wxWidgets_LIBRARIES} ${OPENGL_LIBRARIES} ${OTHER_LIBRARIES})
 ENDIF (NOT BUNDLE_APP)
 
 IF (MSVC)
@@ -734,10 +740,10 @@ IF (APPLE AND BUNDLE_APP)
     ENDIF()
     
     ADD_DEFINITIONS(
-        -std=c++0x 
         -pthread
         -D_OSX_APP_
-    )   
+    )
+    SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -std=c++0x")
       
     ADD_EXECUTABLE(CubicSDR 
         MACOSX_BUNDLE 
@@ -759,7 +765,8 @@ IF (APPLE AND BUNDLE_APP)
         MACOSX_PACKAGE_LOCATION Resources/fonts
     )
 
-    target_link_libraries(CubicSDR ${LIQUID_LIB} ${wxWidgets_LIBRARIES} ${OPENGL_LIBRARIES} ${OTHER_LIBRARIES})
+    #target_link_libraries(CubicSDR ${LIQUID_LIB} ${wxWidgets_LIBRARIES} ${OPENGL_LIBRARIES} ${OTHER_LIBRARIES})
+    target_link_libraries(CubicSDR ${wxWidgets_LIBRARIES} ${OPENGL_LIBRARIES} ${OTHER_LIBRARIES})
     SET_TARGET_PROPERTIES(CubicSDR PROPERTIES
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_INFO_STRING "CubicSDR Open-Source Software-Defined Radio Application"

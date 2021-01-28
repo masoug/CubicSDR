@@ -324,6 +324,7 @@ bool CubicSDR::OnInit() {
     Modem::addModemFactory(ModemQPSK::factory, "QPSK", 200000);
     Modem::addModemFactory(ModemSQAM::factory, "SQAM", 200000);
     Modem::addModemFactory(ModemST::factory, "ST", 200000);
+    Modem::addModemFactory(ModemSAMMY::factory, "SAMMY", 200000);
 #endif
     
     frequency = wxGetApp().getConfig()->getCenterFreq();

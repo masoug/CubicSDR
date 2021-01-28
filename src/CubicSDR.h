@@ -53,6 +53,7 @@
 #include "ModemQPSK.h"
 #include "ModemSQAM.h"
 #include "ModemST.h"
+#include "ModemSAMMY.hpp"
 #endif
 
 #ifdef USE_HAMLIB

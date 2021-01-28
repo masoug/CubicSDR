@@ -475,6 +475,7 @@ ModeSelectorCanvas *AppFrame::makeModemAdvSelectorPanel(wxPanel *parent, const w
     pCanvas->addChoice("SQAM");
     pCanvas->addChoice("QAM");
     pCanvas->addChoice("QPSK");
+    pCanvas->addChoice("SAMMY");
     pCanvas->setHelpTip("Choose advanced modulation types.");
     pCanvas->SetMinSize(wxSize(50, -1));
     pCanvas->SetMaxSize(wxSize(50, -1));
