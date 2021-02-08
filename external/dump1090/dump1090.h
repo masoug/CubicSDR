@@ -422,6 +422,8 @@ struct modesMessage {
 extern "C" {
 #endif
 
+uint32_t modesChecksum(unsigned char *msg, int bits);
+
 //
 // Functions exported from mode_ac.c
 //

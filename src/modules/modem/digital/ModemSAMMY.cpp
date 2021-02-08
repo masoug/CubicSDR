@@ -1,206 +1,103 @@
 #include <sstream>
+#include <iomanip>
 
+#include "dump1090.h"
 #include "ModemSAMMY.hpp"
 
 
-#define OUTBUFFER_SIZE 16000000
+using BitVector = std::array<bool, ModemSAMMY::BITS_PER_FRAME>;
 
-void InitModeSDecoder(ModeSDecoder& decoder)
-{
-    // Allocate the various buffers used by Modes
-    if ( ((decoder.icao_cache = (uint32_t *) malloc(sizeof(uint32_t) * MODES_ICAO_CACHE_LEN * 2)                  ) == NULL) ||
-         ((decoder.pFileData  = (uint16_t *) malloc(MODES_ASYNC_BUF_SIZE)                                         ) == NULL) ||
-         ((decoder.magnitude  = (uint16_t *) malloc(MODES_ASYNC_BUF_SIZE+MODES_PREAMBLE_SIZE+MODES_LONG_MSG_SIZE) ) == NULL) ||
-         ((decoder.maglut     = (uint16_t *) malloc(sizeof(uint16_t) * 256 * 256)                                 ) == NULL))
-    {
-        fprintf(stderr, "Out of memory allocating data buffer.\n");
-        exit(1);
-    }
+// Borrowed from "dump1090" project
+// ===================== Mode S detection and decoding  ===================
+//
+// Parity table for MODE S Messages.
+// The table contains 112 elements, every element corresponds to a bit set
+// in the message, starting from the first bit of actual data after the
+// preamble.
+//
+// For messages of 112 bit, the whole table is used.
+// For messages of 56 bits only the last 56 elements are used.
+//
+// The algorithm is as simple as xoring all the elements in this table
+// for which the corresponding bit on the message is set to 1.
+//
+// The latest 24 elements in this table are set to 0 as the checksum at the
+// end of the message should not affect the computation.
+//
+// Note: this function can be used with DF11 and DF17, other modes have
+// the CRC xored with the sender address as they are reply to interrogations,
+// but a casual listener can't split the address from the checksum.
+//
+constexpr uint32_t modes_checksum_table[112] = {
+        0x3935ea, 0x1c9af5, 0xf1b77e, 0x78dbbf, 0xc397db, 0x9e31e9, 0xb0e2f0, 0x587178,
+        0x2c38bc, 0x161c5e, 0x0b0e2f, 0xfa7d13, 0x82c48d, 0xbe9842, 0x5f4c21, 0xd05c14,
+        0x682e0a, 0x341705, 0xe5f186, 0x72f8c3, 0xc68665, 0x9cb936, 0x4e5c9b, 0xd8d449,
+        0x939020, 0x49c810, 0x24e408, 0x127204, 0x093902, 0x049c81, 0xfdb444, 0x7eda22,
+        0x3f6d11, 0xe04c8c, 0x702646, 0x381323, 0xe3f395, 0x8e03ce, 0x4701e7, 0xdc7af7,
+        0x91c77f, 0xb719bb, 0xa476d9, 0xadc168, 0x56e0b4, 0x2b705a, 0x15b82d, 0xf52612,
+        0x7a9309, 0xc2b380, 0x6159c0, 0x30ace0, 0x185670, 0x0c2b38, 0x06159c, 0x030ace,
+        0x018567, 0xff38b7, 0x80665f, 0xbfc92b, 0xa01e91, 0xaff54c, 0x57faa6, 0x2bfd53,
+        0xea04ad, 0x8af852, 0x457c29, 0xdd4410, 0x6ea208, 0x375104, 0x1ba882, 0x0dd441,
+        0xf91024, 0x7c8812, 0x3e4409, 0xe0d800, 0x706c00, 0x383600, 0x1c1b00, 0x0e0d80,
+        0x0706c0, 0x038360, 0x01c1b0, 0x00e0d8, 0x00706c, 0x003836, 0x001c1b, 0xfff409,
+        0x000000, 0x000000, 0x000000, 0x000000, 0x000000, 0x000000, 0x000000, 0x000000,
+        0x000000, 0x000000, 0x000000, 0x000000, 0x000000, 0x000000, 0x000000, 0x000000,
+        0x000000, 0x000000, 0x000000, 0x000000, 0x000000, 0x000000, 0x000000, 0x000000
+};
 
-    // Clear the buffers that have just been allocated, just in-case
-    memset(decoder.icao_cache, 0,   sizeof(uint32_t) * MODES_ICAO_CACHE_LEN * 2);
-    memset(decoder.pFileData,127,   MODES_ASYNC_BUF_SIZE);
-    memset(decoder.magnitude,  0,   MODES_ASYNC_BUF_SIZE+MODES_PREAMBLE_SIZE+MODES_LONG_MSG_SIZE);
+constexpr char dec2hex[16] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
 
-    // Validate the users Lat/Lon home location inputs
-    if ( (decoder.fUserLat >   90.0)  // Latitude must be -90 to +90
-         || (decoder.fUserLat <  -90.0)  // and
-         || (decoder.fUserLon >  360.0)  // Longitude must be -180 to +360
-         || (decoder.fUserLon < -180.0) ) {
-        decoder.fUserLat = decoder.fUserLon = 0.0;
-    } else if (decoder.fUserLon > 180.0) { // If Longitude is +180 to +360, make it -180 to 0
-        decoder.fUserLon -= 360.0;
-    }
-    // If both Lat and Lon are 0.0 then the users location is either invalid/not-set, or (s)he's in the
-    // Atlantic ocean off the west coast of Africa. This is unlikely to be correct.
-    // Set the user LatLon valid flag only if either Lat or Lon are non zero. Note the Greenwich meridian
-    // is at 0.0 Lon,so we must check for either fLat or fLon being non zero not both.
-    // Testing the flag at runtime will be much quicker than ((fLon != 0.0) || (fLat != 0.0))
-    decoder.bUserFlags &= ~MODES_USER_LATLON_VALID;
-    if ((decoder.fUserLat != 0.0) || (decoder.fUserLon != 0.0)) {
-        decoder.bUserFlags |= MODES_USER_LATLON_VALID;
-    }
 
-    // Initialise the Block Timers to something half sensible
-    ftime(&decoder.stSystemTimeBlk);
-    for (int i = 0; i < MODES_ASYNC_BUF_NUMBER; i++)
-    {decoder.stSystemTimeRTL[i] = decoder.stSystemTimeBlk;}
+inline std::string
+to_hex(const uint8_t byte) {
+    std::string result(2, '0');
 
-    // Each I and Q value varies from 0 to 255, which represents a range from -1 to +1. To get from the
-    // unsigned (0-255) range you therefore subtract 127 (or 128 or 127.5) from each I and Q, giving you
-    // a range from -127 to +128 (or -128 to +127, or -127.5 to +127.5)..
-    //
-    // To decode the AM signal, you need the magnitude of the waveform, which is given by sqrt((I^2)+(Q^2))
-    // The most this could be is if I&Q are both 128 (or 127 or 127.5), so you could end up with a magnitude
-    // of 181.019 (or 179.605, or 180.312)
-    //
-    // However, in reality the magnitude of the signal should never exceed the range -1 to +1, because the
-    // values are I = rCos(w) and Q = rSin(w). Therefore the integer computed magnitude should (can?) never
-    // exceed 128 (or 127, or 127.5 or whatever)
-    //
-    // If we scale up the results so that they range from 0 to 65535 (16 bits) then we need to multiply
-    // by 511.99, (or 516.02 or 514). antirez's original code multiplies by 360, presumably because he's
-    // assuming the maximim calculated amplitude is 181.019, and (181.019 * 360) = 65166.
-    //
-    // So lets see if we can improve things by subtracting 127.5, Well in integer arithmatic we can't
-    // subtract half, so, we'll double everything up and subtract one, and then compensate for the doubling
-    // in the multiplier at the end.
-    //
-    // If we do this we can never have I or Q equal to 0 - they can only be as small as +/- 1.
-    // This gives us a minimum magnitude of root 2 (0.707), so the dynamic range becomes (1.414-255). This
-    // also affects our scaling value, which is now 65535/(255 - 1.414), or 258.433254
-    //
-    // The sums then become mag = 258.433254 * (sqrt((I*2-255)^2 + (Q*2-255)^2) - 1.414)
-    //                   or mag = (258.433254 * sqrt((I*2-255)^2 + (Q*2-255)^2)) - 365.4798
-    //
-    // We also need to clip mag just incaes any rogue I/Q values somehow do have a magnitude greater than 255.
-    //
+    result[0] = dec2hex[byte >> 4];
+    result[1] = dec2hex[byte & 0x0F];
 
-    for (int i = 0; i <= 255; i++) {
-        for (int q = 0; q <= 255; q++) {
-            int mag, mag_i, mag_q;
-
-            mag_i = (i * 2) - 255;
-            mag_q = (q * 2) - 255;
-
-            mag = (int) round((sqrt((mag_i*mag_i)+(mag_q*mag_q)) * 258.433254) - 365.4798);
-
-            decoder.maglut[(i*256)+q] = (uint16_t) ((mag < 65535) ? mag : 65535);
-        }
-    }
-
-    // set debug flags for now
-    decoder.stats = 1;
-    decoder.debug |= MODES_DEBUG_DEMOD;
-    decoder.debug |= MODES_DEBUG_DEMODERR;
-    decoder.debug |= MODES_DEBUG_GOODCRC;
-    decoder.debug |= MODES_DEBUG_BADCRC;
-    decoder.debug |= MODES_DEBUG_NOPREAMBLE;
-//    decoder.debug = 0;
+    return result;
 }
 
-void FreeModeSDecoder(ModeSDecoder& decoder)
-{
-    free(decoder.icao_cache);
-    free(decoder.pFileData);
-    free(decoder.magnitude);
-    free(decoder.maglut);
-}
-
-static
 std::string
-write_stats(ModeSDecoder& decoder) {
-    int j;
-    time_t now = time(NULL);
+ModemSAMMY::ModeSMessage::to_string() const
+{
+    std::stringstream ss;
+    std::ios_base::fmtflags f(ss.flags());
 
-    std::stringstream result;
-
-    result << "\n\n";
-    result << "Statistics as at " << ctime(&now) << std::endl;
-
-    result << decoder.stat_blocks_processed << " sample blocks processed\n";
-    result << decoder.stat_blocks_dropped << " sample blocks dropped\n";
-    result << decoder.stat_ModeAC << " ModeA/C detected\n";
-    result << decoder.stat_valid_preamble << " valid Mode-S preambles\n";
-    result << decoder.stat_DF_Len_Corrected << " DF-?? fields corrected for length\n";
-    result << decoder.stat_DF_Type_Corrected << " DF-?? fields corrected for type\n";
-    result << decoder.stat_demodulated0 << " demodulated with 0 errors\n";
-    result << decoder.stat_demodulated1 << " demodulated with 1 error\n";
-    result << decoder.stat_demodulated2 << " demodulated with 2 errors\n";
-    result << decoder.stat_demodulated3 << " demodulated with > 2 errors\n";
-    result << decoder.stat_goodcrc << " with good crc\n";
-    result << decoder.stat_badcrc << " with bad crc\n";
-    result << decoder.stat_fixed << " errors corrected\n";
-
-    for (j = 0;  j < MODES_MAX_BITERRORS;  j++) {
-        result << "   " << decoder.stat_bit_fix[j] << " with " << j+1 << " bit " << ((j==0)?"error":"errors") << "\n";
+    ss << "Raw Frame: ";
+    for (const auto& b : frame_bytes) {
+        ss << to_hex(b);
     }
+    ss << std::endl;
 
-    if (decoder.phase_enhance) {
-        result << decoder.stat_out_of_phase << " phase enhancement attempts\n";
-        result << decoder.stat_ph_demodulated0 << " phase enhanced demodulated with 0 errors\n";
-        result << decoder.stat_ph_demodulated1 << " phase enhanced demodulated with 1 error\n";
-        result << decoder.stat_ph_demodulated2 << " phase enhanced demodulated with 2 errors\n";
-        result << decoder.stat_ph_demodulated3 << " phase enhanced demodulated with > 2 errors\n";
-        result << decoder.stat_ph_goodcrc << " phase enhanced with good crc\n";
-        result << decoder.stat_ph_badcrc << " phase enhanced with bad crc\n";
-        result << decoder.stat_ph_fixed << " phase enhanced errors corrected\n";
+    ss << "Downlink Format: " << downlink_format << std::endl;
+    ss << "Capabilty: " << capability << std::endl;
+    ss << "ICAO Address: " << std::setfill('0') << std::setw(6) << std::hex << std::uppercase << icao << std::endl;
+    ss.flags(f);
 
-        for (j = 0;  j < MODES_MAX_BITERRORS;  j++) {
-            result << "   " << decoder.stat_ph_bit_fix[j] << " with " << j+1 << " bit " << ((j==0)? "error":"errors") << "\n";
-        }
+    ss << "Raw Message: ";
+    for (const auto& b : message) {
+        ss << to_hex(b);
     }
+    ss << std::endl;
 
-    result << decoder.stat_goodcrc + decoder.stat_ph_goodcrc + decoder.stat_fixed + decoder.stat_ph_fixed << " total usable messages\n";
+    ss << "  Type Code: " << type_code << std::endl;
 
-    decoder.stat_blocks_processed =
-    decoder.stat_blocks_dropped = 0;
-
-    decoder.stat_ModeAC =
-    decoder.stat_valid_preamble =
-    decoder.stat_DF_Len_Corrected =
-    decoder.stat_DF_Type_Corrected =
-    decoder.stat_demodulated0 =
-    decoder.stat_demodulated1 =
-    decoder.stat_demodulated2 =
-    decoder.stat_demodulated3 =
-    decoder.stat_goodcrc =
-    decoder.stat_badcrc =
-    decoder.stat_fixed = 0;
-
-    decoder.stat_out_of_phase =
-    decoder.stat_ph_demodulated0 =
-    decoder.stat_ph_demodulated1 =
-    decoder.stat_ph_demodulated2 =
-    decoder.stat_ph_demodulated3 =
-    decoder.stat_ph_goodcrc =
-    decoder.stat_ph_badcrc =
-    decoder.stat_ph_fixed = 0;
-
-    for (j = 0;  j < MODES_MAX_BITERRORS;  j++) {
-        decoder.stat_ph_bit_fix[j] = 0;
-        decoder.stat_bit_fix[j] = 0;
-    }
-
-    return result.str();
+    return ss.str();
 }
+
 
 ModemSAMMY::ModemSAMMY()
-    : ModemDigital(), m_decoder(), m_buffer(MODES_ASYNC_BUF_SAMPLES), m_stats_count(0),
-    m_outfile("modem_sammy.dat", std::ios::binary),
-    m_outbuffer(OUTBUFFER_SIZE), m_out_count(0)
+    : ModemDigital(),
+      m_buffer(BUFFER_SIZE), m_buf_idx(0)
+//    m_stats_count(0), m_outfile("modem_sammy.dat", std::ios::binary), m_outbuffer(OUTBUFFER_SIZE), m_out_count(0)
 {
     std::cout << "ModemSAMMY::ModemSAMMY()" << std::endl;
-
-//    InitModeSDecoder(m_decoder);
-//    modesInitErrorInfo(&m_decoder);
 }
 
 ModemSAMMY::~ModemSAMMY()
 {
     std::cout << "ModemSAMMY::~ModemSAMMY()" << std::endl;
-
-//    FreeModeSDecoder(m_decoder);
 }
 
 std::string ModemSAMMY::getName()
@@ -214,11 +111,207 @@ ModemBase *ModemSAMMY::factory()
 }
 
 int ModemSAMMY::checkSampleRate(long long, int) {
-    return MODES_DEFAULT_RATE;
+    return SAMPLE_RATE;
 }
 
 int ModemSAMMY::getDefaultSampleRate() {
-    return MODES_DEFAULT_RATE;
+    return SAMPLE_RATE;
+}
+
+inline bool
+check_preamble_relations(const float* buffer)
+{
+    // First check of relations between the first 10 samples
+    // representing a valid preamble. We don't even investigate further
+    // if this simple test is not passed
+
+    return buffer[0] > buffer[1] and
+           buffer[1] < buffer[2] and
+           buffer[2] > buffer[3] and
+           buffer[3] < buffer[0] and
+           buffer[4] < buffer[0] and
+           buffer[5] < buffer[0] and
+           buffer[6] < buffer[0] and
+           buffer[7] > buffer[8] and
+           buffer[8] < buffer[9] and
+           buffer[9] > buffer[6];
+}
+
+inline bool
+check_preamble_levels(const float* buffer)
+{
+    // The samples between the two spikes must be < than the average
+    // of the high spikes level. We don't test bits too near to
+    // the high levels as signals can be out of phase so part of the
+    // energy can be in the near samples
+    const float high = (buffer[0] + buffer[2] + buffer[7] + buffer[9]) / 6.f;
+    if (buffer[4] >= high or buffer[5] >= high)
+    {
+        return false;
+    }
+
+    // Similarly samples in the range 11-14 must be low, as it is the
+    // space between the preamble and real data. Again we don't test
+    // bits too near to high levels, see above
+    return buffer[11] < high and
+           buffer[12] < high and
+           buffer[13] < high and
+           buffer[14] < high;
+}
+
+inline BitVector
+extract_bitvector(const float *buffer)
+{
+    BitVector bitvector{};
+    for (size_t i = 0; i < ModemSAMMY::BITS_PER_FRAME; i++) {
+        bitvector[i] = buffer[2*i] > buffer[(2*i)+1];
+    }
+
+    return bitvector;
+}
+
+inline ModemSAMMY::ByteArray
+extract_bytearray(const BitVector& bitvector)
+{
+    ModemSAMMY::ByteArray result{};
+    for (size_t i = 0; i < ModemSAMMY::BYTES_PER_FRAME; i++) {
+        const auto offset = i * 8;
+        result[i]  = static_cast<uint8_t>(bitvector[offset + 0]) << 7;
+        result[i] |= static_cast<uint8_t>(bitvector[offset + 1]) << 6;
+        result[i] |= static_cast<uint8_t>(bitvector[offset + 2]) << 5;
+        result[i] |= static_cast<uint8_t>(bitvector[offset + 3]) << 4;
+        result[i] |= static_cast<uint8_t>(bitvector[offset + 4]) << 3;
+        result[i] |= static_cast<uint8_t>(bitvector[offset + 5]) << 2;
+        result[i] |= static_cast<uint8_t>(bitvector[offset + 6]) << 1;
+        result[i] |= static_cast<uint8_t>(bitvector[offset + 7]) << 0;
+    }
+
+    return result;
+}
+
+uint32_t
+compute_checksum(const BitVector& bitvector)
+{
+    uint32_t crc = 0;
+    for (size_t i = 0; i < bitvector.size() - 24; i++)
+    {
+        if (bitvector[i]) {
+            crc ^= modes_checksum_table[i];
+        }
+    }
+
+    uint32_t remainder = 0;
+    for (size_t i = bitvector.size() - 24; i < bitvector.size(); i++)
+    {
+        remainder |= static_cast<uint32_t>(bitvector[i]);
+
+        if (i < (bitvector.size() - 1)) {
+            remainder <<= 1;
+        }
+    }
+    const auto checksum = ((crc ^ remainder) & 0x00FFFFFF);
+    return checksum;
+}
+
+ModemSAMMY::ModeSMessage
+extract_message(const ModemSAMMY::ByteArray& frame_bytes)
+{
+    ModemSAMMY::ModeSMessage message{};
+    message.frame_bytes = frame_bytes;
+
+    // the first 8 bits (1 byte) of the frame encodes the
+    // downlink format (DF) and capabilities (CA) of the frame
+    // DF is the first 5 bits while the CA is the last 3 bits
+    const uint8_t df_ca_byte = frame_bytes[0];
+    message.downlink_format = df_ca_byte >> 3;
+    message.capability = df_ca_byte & 0x07;
+
+    // the next 24 bits (3 bytes) encode the ICAO aircraft address
+    message.icao = (frame_bytes[1] << 16) | (frame_bytes[2] << 8) | (frame_bytes[3]);
+
+    // then find the type code that tells us how to further decode the message data
+    const auto type_code = frame_bytes[4] >> 3;
+    message.type_code = type_code;
+    std::copy(frame_bytes.begin()+4, frame_bytes.begin()+11, message.message.begin());
+
+    return message;
+}
+
+void
+ModemSAMMY::_decode_mode_s()
+{
+    // scan through the buffer
+    unsigned int possible_preambles = 0;
+    unsigned int valid_messages = 0;
+    for (int i = 0; i < BUFFER_THRESHOLD; i++)
+    {
+        // shamelessly borrowed from dump1090.c
+
+        // The Mode S preamble is made of impulses of 0.5 microseconds at
+        // the following time offsets:
+        //
+        // 0   - 0.5 usec: first impulse.
+        // 1.0 - 1.5 usec: second impulse.
+        // 3.5 - 4   usec: third impulse.
+        // 4.5 - 5   usec: last impulse.
+        //
+        // Since we are sampling at 2 Mhz every sample in our magnitude vector
+        // is 0.5 usec, so the preamble will look like this, assuming there is
+        // an impulse at offset 0 in the array:
+        //
+        // 0   -----------------
+        // 1   -
+        // 2   ------------------
+        // 3   --
+        // 4   -
+        // 5   --
+        // 6   -
+        // 7   ------------------
+        // 8   --
+        // 9   -------------------
+        if (not check_preamble_relations(&m_buffer[i]))
+        {
+            // samples at the current position in the buffer don't match the pattern of a preamble
+            continue;
+        }
+
+        if (not check_preamble_levels(&m_buffer[i]))
+        {
+            // levels in between the spikes in the buffer don't match the profile for a preamble
+            continue;
+        }
+
+        possible_preambles++;
+
+        // now that we have a possible preamble, extract the frame from the buffer into a bytestream
+        const auto frame_bitvector = extract_bitvector(&m_buffer[i + SAMPLES_PER_PREAMBLE]);
+        const ByteArray frame_bytes = extract_bytearray(frame_bitvector);
+
+        // and check if that bytestream is valid data by applying the CRC check
+        const auto checksum = compute_checksum(frame_bitvector);
+//        const auto checksum = modesChecksum((unsigned char*)frame_bytes.data(), 112);
+//        if (checksum != checksum1) {
+//            std::cout << "Checksum mismatch: Expect=" << checksum << " got=" << checksum1 << std::endl;
+//        }
+        if (checksum == 0) {
+            valid_messages++;
+        } else {
+            continue;
+        }
+
+        // if the CRC check passes, extract the data...
+        const auto message = extract_message(frame_bytes);
+
+        outStream << message.to_string() << std::endl << std::endl;
+
+        // ...then jump to the next sample after the end of this packet to start scanning for the next preamble
+        i += SAMPLES_PER_FRAME;
+    }
+
+//    std::cout << "Decoder Report:" << std::endl;
+//    std::cout << "  " << possible_preambles << " possible preambles." << std::endl;
+//    std::cout << "  " << valid_messages << " valid messages." << std::endl;
+//    std::cout << ::std::endl;
 }
 
 void ModemSAMMY::demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInput *audioOut)
@@ -226,38 +319,48 @@ void ModemSAMMY::demodulate(ModemKit *kit, ModemIQData *input, AudioThreadInput 
     auto* dkit = (ModemKitDigital *)kit;
     digitalStart(dkit, nullptr, input);
 
-//    if (input->data.size() > m_buffer.size()) {
-//        m_buffer.resize(input->data.size());
-//    }
-
-    for (size_t i = 0; i < input->data.size(); i++) {
-        const float real = input->data[i].real;
-        const float imag = input->data[i].imag;
-        const float mag = std::sqrt((real*real) + (imag*imag));
-
-//        m_buffer[i] = static_cast<uint16_t>(10000.0 * mag);
-        if (m_out_count < OUTBUFFER_SIZE) {
-            if (m_out_count % 100000 == 0) {
-                outStream << "Filling buffer... " << m_out_count << std::endl;
-            }
-            m_outbuffer[m_out_count] = mag;
-            m_out_count++;
-        } else if (m_out_count == OUTBUFFER_SIZE) {
-            outStream << "Saving buffer..." << std::endl;
-            m_outfile.write((char*)m_outbuffer.data(), m_outbuffer.size() * sizeof(float));
-            m_outfile.flush();
-            m_out_count++;
-        }
+    const auto bufsize = m_buf_idx + input->data.size() + 1;
+    if (bufsize > m_buffer.size()) {
+        m_buffer.resize(bufsize);
     }
 
-//    detectModeS(&m_decoder, m_buffer.data(), static_cast<uint32_t>(input->data.size()));
-//
-//    if (m_stats_count == 99) {
-//        outStream << write_stats(m_decoder) << std::endl;
-//        m_stats_count = 0;
-//    } else {
-//        m_stats_count++;
-//    }
+    for (auto &sample : input->data) {
+        const float real = sample.real;
+        const float imag = sample.imag;
+        const float mag = std::sqrt((real*real) + (imag*imag));
+
+        m_buffer[m_buf_idx] = mag;
+        m_buf_idx++;
+
+//        if (m_out_count < OUTBUFFER_SIZE) {
+//            if (m_out_count % 100000 == 0) {
+//                outStream << "Filling buffer... " << m_out_count << std::endl;
+//            }
+//            m_outbuffer[m_out_count] = mag;
+//            m_out_count++;
+//        } else if (m_out_count == OUTBUFFER_SIZE) {
+//            outStream << "Saving buffer..." << std::endl;
+//            m_outfile.write((char*)m_outbuffer.data(), m_outbuffer.size() * sizeof(float));
+//            m_outfile.flush();
+//            m_out_count++;
+//        }
+    }
+
+    // once we've filled the buffer we want to have the decoder scan through and identify messages.
+    if (m_buf_idx >= BUFFER_SIZE)
+    {
+//        std::cout << "Decoding buffer... m_buf_idx=" << m_buf_idx << std::endl;
+        // scan through the buffer and extract any messages that can be decoded
+        _decode_mode_s();
+
+        // reset the buffer, copying over any remaining data from the end of the buffer
+        // to the front, and continue filling
+        std::copy(m_buffer.begin() + BUFFER_THRESHOLD, m_buffer.begin() + m_buf_idx, m_buffer.begin());
+        m_buf_idx -= BUFFER_THRESHOLD;
+
+//        std::cout << "  New m_buf_idx=" << m_buf_idx << std::endl;
+//        std::cout << std::endl;
+    }
 
     digitalFinish(dkit, nullptr);
 }

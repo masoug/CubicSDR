@@ -164,7 +164,7 @@ ELSE (MSVC)
     ADD_DEFINITIONS(
         -pthread
     )
-    SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -std=c++0x")
+    SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -O2 -g -std=c++0x")
 ENDIF(MSVC)
 
 find_package(OpenGL REQUIRED)
@@ -743,7 +743,7 @@ IF (APPLE AND BUNDLE_APP)
         -pthread
         -D_OSX_APP_
     )
-    SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -std=c++0x")
+    SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -O2 -g -std=c++0x")
       
     ADD_EXECUTABLE(CubicSDR 
         MACOSX_BUNDLE 

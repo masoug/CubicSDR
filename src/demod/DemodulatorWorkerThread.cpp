@@ -69,6 +69,7 @@ void DemodulatorWorkerThread::run() {
                 if (demodCommand.settings.size()) {
                     cModem->writeSettings(demodCommand.settings);
                 }
+                std::cout << "makeDemod: sampleRate=" << demodCommand.sampleRate << std::endl;
                 result.sampleRate = demodCommand.sampleRate;
                 wxGetApp().getAppFrame()->notifyUpdateModemProperties();
             }
@@ -100,6 +101,9 @@ void DemodulatorWorkerThread::run() {
             if (cModem && result.sampleRate && result.bandwidth) {
                 result.bandwidth = cModem->checkSampleRate(result.bandwidth, makeDemod?demodCommand.audioSampleRate:filterCommand.audioSampleRate);
                 result.iqResampleRatio = (double) (result.bandwidth) / (double) result.sampleRate;
+                std::cout << std::endl << "iqResampleRatio=" << result.iqResampleRatio << std::endl;
+                std::cout << "bandwidth=" << result.bandwidth << std::endl;
+                std::cout << "sampleRate=" << result.sampleRate << std::endl << std::endl;
                 result.iqResampler = msresamp_crcf_create(result.iqResampleRatio, As);
             }
 

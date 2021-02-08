@@ -1684,43 +1684,82 @@ void detectModeS(struct ModeSDecoder* decoder, uint16_t *m, uint32_t mlen) {
                       + (pPreamble[7]-pPreamble[6])
                       + (pPreamble[9]-pPreamble[8]);
 
+        // scan through the message...
         msglen = scanlen = MODES_LONG_MSG_BITS;
         for (i = 0; i < scanlen; i++) {
             uint32_t a = *pPtr++;
             uint32_t b = *pPtr++;
 
-            if      (a > b)
-            {theByte |= 1; if (i < 56) {sigStrength += (a-b);}}
+            // ..decode the pulses by comparing adjacent samples...
+            if (a > b)
+            {
+                theByte |= 1;
+                if (i < 56) {
+                    sigStrength += (a-b);
+                }
+            }
             else if (a < b)
-            {/*theByte |= 0;*/ if (i < 56) {sigStrength += (b-a);}}
+            {
+                /*theByte |= 0;*/
+                if (i < 56) {
+                    sigStrength += (b-a);
+                }
+            }
+            // ...now if a == b we're in an ambiguous case of an "undecodeable" bit...
             else if (i >= MODES_SHORT_MSG_BITS) //(a == b), and we're in the long part of a frame
-            {errors++;  /*theByte |= 0;*/}
+            {
+                errors++;
+                /*theByte |= 0;*/
+            }
             else if (i >= 5)                    //(a == b), and we're in the short part of a frame
-            {scanlen = MODES_LONG_MSG_BITS; errors56 = ++errors;/*theByte |= 0;*/}
+            {
+                scanlen = MODES_LONG_MSG_BITS;
+                errors56 = ++errors;/*theByte |= 0;*/
+            }
             else if (i)                         //(a == b), and we're in the message type part of a frame
-            {errorsTy = errors56 = ++errors; theErrs |= 1; /*theByte |= 0;*/}
+            {
+                errorsTy = errors56 = ++errors;
+                theErrs |= 1;
+                /*theByte |= 0;*/
+            }
             else                                //(a == b), and we're in the first bit of the message type part of a frame
-            {errorsTy = errors56 = ++errors; theErrs |= 1; theByte |= 1;}
-
-            if ((i & 7) == 7)
-            {*pMsg++ = theByte;}
-            else if (i == 4) {
-                msglen  = modesMessageLenByType(theByte);
-                if (errors == 0)
-                {scanlen = msglen;}
+            {
+                errorsTy = errors56 = ++errors;
+                theErrs |= 1;
+                theByte |= 1;
             }
 
+            // save every 8 decoded bits into the message buffer
+            if ((i & 7) == 7)
+            {
+                *pMsg++ = theByte;
+            }
+            else if (i == 4)
+            {
+                // the first 4 bits define the message type (from which we determine the message length)
+                // given by the DF type (downlink format)
+                msglen  = modesMessageLenByType(theByte);
+                if (errors == 0) {
+                    scanlen = msglen;
+                }
+            }
+
+            // shift the byte
             theByte = theByte << 1;
             if (i < 7)
-            {theErrs = theErrs << 1;}
+            {
+                theErrs = theErrs << 1;
+            }
 
             // If we've exceeded the permissible number of encoding errors, abandon ship now
-            if (errors > MODES_MSG_ENCODER_ERRS) {
-
-                if        (i < MODES_SHORT_MSG_BITS) {
+            if (errors > MODES_MSG_ENCODER_ERRS)
+            {
+                if (i < MODES_SHORT_MSG_BITS)
+                {
                     msglen = 0;
-
-                } else if ((errorsTy == 1) && (theErrs == 0x80)) {
+                }
+                else if ((errorsTy == 1) && (theErrs == 0x80))
+                {
                     // If we only saw one error in the first bit of the byte of the frame, then it's possible
                     // we guessed wrongly about the value of the bit. We may be able to correct it by guessing
                     // the other way.
@@ -1747,8 +1786,12 @@ void detectModeS(struct ModeSDecoder* decoder, uint16_t *m, uint32_t mlen) {
 
         // Ensure msglen is consistent with the DF type
         i = modesMessageLenByType(msg[0] >> 3);
-        if      (msglen > i) {msglen = i;}
-        else if (msglen < i) {msglen = 0;}
+        if      (msglen > i) {
+            msglen = i;
+        }
+        else if (msglen < i) {
+            msglen = 0;
+        }
 
         //
         // If we guessed at any of the bits in the DF type field, then look to see if our guess was sensible.

@@ -177,7 +177,15 @@ void SDRPostThread::run() {
         bool doUpdate = false;
 
         if (data_in && data_in->data.size()) {
-           
+
+//            std::cout << "SDRPostThread::run():" << std::endl;
+//            std::cout << "  data_in->numChannels=" << data_in->numChannels << std::endl;
+//            std::cout << "  data_in->sampleRate=" << data_in->sampleRate << std::endl;
+//            std::cout << "  data_in->frequency=" << data_in->frequency << std::endl;
+//            std::cout << "  data_in->data.size()=" << data_in->data.size() << std::endl;
+//            std::cout << "  chanMode=" << chanMode << std::endl;
+//            std::cout << std::endl;
+
             if(data_in->numChannels > 1) {
                 if (chanMode == 1) {
                     runPFBCH(data_in.get());
