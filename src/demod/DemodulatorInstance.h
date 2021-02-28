@@ -126,6 +126,7 @@ public:
     
     bool isModemInitialized();
     std::string getModemType();
+    std::string getModemName();
     ModemSettings getLastModemSettings(std::string demodType);
 
 #if ENABLE_DIGITAL_LAB

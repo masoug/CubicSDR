@@ -403,6 +403,7 @@ SET (cubicsdr_sources
     external/cubicvr2/math/cubic_math.cpp
     external/dump1090/mode_s.c
     external/dump1090/mode_ac.c
+    external/dump1090/ADSBDecoder.cpp
 )
 
 IF(ENABLE_DIGITAL_LAB)
@@ -410,6 +411,7 @@ IF(ENABLE_DIGITAL_LAB)
         ${cubicsdr_sources}
         src/forms/DigitalConsole/DigitalConsole.cpp
         src/forms/DigitalConsole/DigitalConsoleFrame.cpp
+        src/forms/DigitalConsole/ADSBFrame.cpp
         src/modules/modem/digital/ModemASK.cpp
         src/modules/modem/digital/ModemAPSK.cpp
         src/modules/modem/digital/ModemBPSK.cpp
@@ -536,6 +538,7 @@ SET (cubicsdr_headers
     ${cubicsdr_headers}
     src/forms/DigitalConsole/DigitalConsole.h
     src/forms/DigitalConsole/DigitalConsoleFrame.h
+    src/forms/DigitalConsole/ADSBFrame.hpp
     src/modules/modem/digital/ModemASK.h
     src/modules/modem/digital/ModemAPSK.h
     src/modules/modem/digital/ModemBPSK.h

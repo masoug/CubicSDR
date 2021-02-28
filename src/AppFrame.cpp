@@ -2273,9 +2273,13 @@ void AppFrame::handleModemProperties() {
 #if ENABLE_DIGITAL_LAB
         if (demod->getModemType() == "digital") {
             ModemDigitalOutputConsole *outp = (ModemDigitalOutputConsole *) demod->getOutput();
-            if (!outp->getDialog()) {
+            if (not outp->getDialog() and not outp->getADSBDialog()) {
                 outp->setTitle(demod->getDemodulatorType() + ": " + frequencyToStr(demod->getFrequency()));
-                outp->setDialog(new DigitalConsole(this, outp));
+                if (demod->getModemName() == "SAMMY") {
+                    outp->setDialog(new ADSBConsole(this, outp));
+                } else {
+                    outp->setDialog(new DigitalConsole(this, outp));
+                }
             }
             demod->showOutput();
         }

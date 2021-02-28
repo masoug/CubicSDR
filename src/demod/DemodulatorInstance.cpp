@@ -610,6 +610,13 @@ std::string DemodulatorInstance::getModemType() {
     return "";
 }
 
+std::string DemodulatorInstance::getModemName() {
+    if (isModemInitialized()) {
+        return demodulatorPreThread->getModem()->getName();
+    }
+    return "";
+}
+
 ModemSettings DemodulatorInstance::getLastModemSettings(std::string demodType) {
     if (lastModemSettings.find(demodType) != lastModemSettings.end()) {
         return lastModemSettings[demodType];
