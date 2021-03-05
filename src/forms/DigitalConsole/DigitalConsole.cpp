@@ -89,6 +89,7 @@ ADSBConsole::DoRefresh(
     for (; row < m_aircraft_grid->GetNumberRows(); row++) {
         for (int col = 0; col < GRID_WIDTH; col++) {
             m_aircraft_grid->SetCellValue(row, col, "");
+            m_aircraft_grid->SetReadOnly(row, col, true);
         }
     }
 
